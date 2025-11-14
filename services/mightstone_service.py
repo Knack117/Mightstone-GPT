@@ -63,12 +63,22 @@ class MightstoneService:
             if not commander_card:
                 commander_card = results[0]  # Fallback to first result
             
+            # Get EDHREC data for themes and tags
+            edhrec_data = {}
+            try:
+                from services.edhrec_service import EDHRECService
+                edhrec = EDHRECService()
+                await edhrec.initialize()
+                edhrec_data = await edhrec.get_commander_data(commander_name)
+            except Exception as e:
+                log.warning(f"Could not fetch EDHREC data for '{commander_name}': {e}")
+            
             # Create commander data
             return CommanderDeck(
                 commander=commander_card,
                 deck=None,
-                themes=[],
-                tags=[],
+                themes=edhrec_data.get("themes", []),
+                tags=[tag["tag"] for tag in edhrec_data.get("tags", [])],
                 colors=commander_card.color_identity or [],
                 edhrec_url=f"https://scryfall.com/search?q=name%3A%22{commander_name.replace(' ', '%20')}%22",
                 average_deck_url=f"https://scryfall.com/search?q=name%3A%22{commander_name.replace(' ', '%20')}%22",
@@ -253,20 +263,123 @@ class MightstoneService:
         include_themes: List[str]
     ) -> List[RecommendationData]:
         """Generate recommendations based on commander data."""
-        return [
-            RecommendationData(
-                category="Lands",
-                cards=[],
-                reasoning=f"Optimal land base for {commander.colors or 'colorless'} commander"
-            ),
-            RecommendationData(
-                category="Ramp",
-                cards=[],
-                reasoning="Mana acceleration cards"
-            ),
-            RecommendationData(
-                category="Interaction",
-                cards=[],
-                reasoning="Removal and protection"
-            )
-        ]
+        recommendations = []
+        
+        try:
+            # Get EDHREC data for real recommendations
+            from services.edhrec_service import EDHRECService
+            edhrec = EDHRECService()
+            await edhrec.initialize()
+            
+            # Get commander summary with themes and sections
+            summary = await edhrec.get_commander_data(commander.commander.name)
+            
+            # Get top cards from commander sections
+            sections = summary.get("sections", {})
+            
+            # High Synergy Cards
+            if sections.get("High Synergy Cards"):
+                synergy_cards = sections["High Synergy Cards"][:10]  # Top 10
+                recommendations.append(RecommendationData(
+                    category="High Synergy",
+                    cards=synergy_cards,
+                    reasoning=f"High synergy cards for {commander.commander.name} based on EDHREC data"
+                ))
+            
+            # Top Cards
+            if sections.get("Top Cards"):
+                top_cards = sections["Top Cards"][:10]  # Top 10
+                recommendations.append(RecommendationData(
+                    category="Top Cards",
+                    cards=top_cards,
+                    reasoning=f"Most popular cards for {commander.commander.name}"
+                ))
+            
+            # Game Changers
+            if sections.get("Game Changers"):
+                game_changers = sections["Game Changers"][:5]  # Top 5
+                recommendations.append(RecommendationData(
+                    category="Game Changers",
+                    cards=game_changers,
+                    reasoning=f"High-impact cards that can change games with {commander.commander.name}"
+                ))
+            
+            # Get average deck cards
+            try:
+                avg_deck = await edhrec.get_average_deck(commander.commander.name, "optimized")
+                avg_cards = [card.name for card in avg_deck.cards[:20]]  # Top 20 from average deck
+                if avg_cards:
+                    recommendations.append(RecommendationData(
+                        category="Average Deck Core",
+                        cards=avg_cards,
+                        reasoning=f"Core cards from average optimized {commander.commander.name} decks"
+                    ))
+            except Exception as e:
+                log.warning(f"Could not fetch average deck for recommendations: {e}")
+            
+            # Color-based recommendations
+            if commander.colors:
+                color_names = {
+                    'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green'
+                }
+                color_text = ', '.join([color_names.get(c, c) for c in commander.colors])
+                
+                # Basic recommendations based on color identity
+                basic_recommendations = {
+                    'W': ['Swords to Plowshares', 'Path to Exile', 'Wrath of God'],
+                    'U': ['Counterspell', 'Cyclonic Rift', 'Mana Drain'],
+                    'B': ['Vampiric Tutor', 'Demonic Tutor', 'Toxic Deluge'],
+                    'R': ['Lightning Bolt', 'Chaos Warp', 'Dockside Extortionist'],
+                    'G': ['Nature\'s Claim', 'Beast Within', 'Heroic Intervention']
+                }
+                
+                for color in commander.colors:
+                    if color in basic_recommendations:
+                        cards = basic_recommendations[color][:5]
+                        recommendations.append(RecommendationData(
+                            category=f"{color_names[color]} Staples",
+                            cards=cards,
+                            reasoning=f"Essential {color_names[color]} cards for {commander.commander.name}"
+                        ))
+            
+            # Fallback if no EDHREC data
+            if not recommendations:
+                recommendations = [
+                    RecommendationData(
+                        category="Lands",
+                        cards=["Sol Ring", "Arcane Signet", "Command Tower"],
+                        reasoning=f"Essential mana base for {commander.commander.name}"
+                    ),
+                    RecommendationData(
+                        category="Interaction",
+                        cards=["Swords to Plowshares", "Counterspell", "Vampiric Tutor"],
+                        reasoning="Core interaction spells"
+                    ),
+                    RecommendationData(
+                        category="Ramp",
+                        cards=["Sol Ring", "Mana Vault", "Rhystic Study"],
+                        reasoning="Mana acceleration and card advantage"
+                    )
+                ]
+        
+        except Exception as e:
+            log.warning(f"Could not generate EDHREC-based recommendations: {e}")
+            # Fallback recommendations
+            recommendations = [
+                RecommendationData(
+                    category="Essentials",
+                    cards=["Sol Ring", "Swords to Plowshares", "Counterspell"],
+                    reasoning="Core Commander staples"
+                ),
+                RecommendationData(
+                    category="Interaction",
+                    cards=["Vampiric Tutor", "Cyclonic Rift", "Demonic Tutor"],
+                    reasoning="Powerful disruption and tutoring"
+                )
+            ]
+        
+        # Filter out excluded cards
+        for rec in recommendations:
+            rec.cards = [card for card in rec.cards if card not in exclude_cards]
+        
+        return recommendations
