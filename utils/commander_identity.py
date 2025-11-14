@@ -6,6 +6,24 @@ import re
 from typing import List, Tuple
 
 
+def commander_to_slug(name: str) -> str:
+    """
+    Convert commander name to URL slug format.
+    
+    Args:
+        name: Commander name
+        
+    Returns:
+        URL-safe slug string
+    """
+    if not name or not name.strip():
+        return ""
+    
+    # Use the first candidate from commander_slug_candidates
+    candidates = commander_slug_candidates(name)
+    return candidates[0] if candidates else ""
+
+
 def normalize_commander_name(name: str) -> str:
     """
     Normalize commander name for consistent searching.
